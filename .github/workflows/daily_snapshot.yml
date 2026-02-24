@@ -1,0 +1,41 @@
+name: Daily Snapshot
+
+on:
+  schedule:
+    # Runs at 6:00 AM UTC every day
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    # Allow manual trigger from the GitHub Actions UI
+
+jobs:
+  fetch-snapshot:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write   # Required to push the updated snapshots.csv back
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install keepa pandas python-dotenv
+
+      - name: Run fetch_snapshot.py
+        env:
+          KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
+        run: python fetch_snapshot.py
+
+      - name: Commit and push updated snapshots.csv
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/cache/snapshots.csv
+          # Only commit if snapshots.csv actually changed
+          git diff --staged --quiet || git commit -m "chore: daily snapshot $(date -u '+%Y-%m-%d')"
+          git push
