@@ -6,7 +6,8 @@ data/target_asins.csv and appends one row per seller-ASIN pair to
 data/cache/snapshots.csv.
 
 Run manually:
-    python fetch_snapshot.py
+    python fetch_snapshot.py           # process all ASINs
+    python fetch_snapshot.py --limit 3 # process first N ASINs only
 
 Run automatically:
     GitHub Action (.github/workflows/daily_snapshot.yml) calls this
@@ -17,6 +18,7 @@ Never import this file from app.py — the live Streamlit app only
 reads snapshots.csv, it never calls Keepa directly.
 """
 
+import argparse
 import csv
 import sys
 import time
@@ -62,9 +64,21 @@ TOKEN_WAIT_SECONDS = 65       # wait this long before rechecking (slightly over 
 
 
 def run():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Only process the first N ASINs (omit to process all)",
+    )
+    args = parser.parse_args()
+
     today = date.today().isoformat()
     print(f"\n{'='*60}")
     print(f"fetch_snapshot.py — {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    if args.limit:
+        print(f"ASIN limit: {args.limit} (dev mode)")
     print(f"{'='*60}")
 
     # Load ASIN seed file
@@ -74,6 +88,8 @@ def run():
 
     asins_df = pd.read_csv(ASINS_FILE)
     asins_df.columns = asins_df.columns.str.strip()
+    if args.limit:
+        asins_df = asins_df.head(args.limit)
     total_asins = len(asins_df)
     print(f"Loaded {total_asins} ASINs from {ASINS_FILE.name}")
 
