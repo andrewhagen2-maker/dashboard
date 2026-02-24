@@ -75,7 +75,6 @@ CHART_LAYOUT = dict(
 
 
 def line_chart(df_daily: pd.DataFrame, y_col: str, title: str, color: str, y_label: str = "") -> go.Figure:
-    """Single-line chart from a daily aggregated DataFrame with a 'date' column."""
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df_daily["date"],
@@ -93,13 +92,11 @@ def line_chart(df_daily: pd.DataFrame, y_col: str, title: str, color: str, y_lab
 
 
 def fba_fbm_chart(df_daily: pd.DataFrame, title: str) -> go.Figure:
-    """Two-line chart: FBA count vs FBM count over time."""
     fig = go.Figure()
     for col, label, color in [
         ("fba_count", "FBA", CHART_COLORS["fba"]),
         ("fbm_count", "FBM", CHART_COLORS["fbm"]),
     ]:
-        fig.update_layout(showlegend=True)
         fig.add_trace(go.Scatter(
             x=df_daily["date"],
             y=df_daily[col],
@@ -109,15 +106,12 @@ def fba_fbm_chart(df_daily: pd.DataFrame, title: str) -> go.Figure:
             name=label,
             hovertemplate=f"{label}: %{{y}}<extra></extra>",
         ))
-    fig.update_layout(title=dict(text=title, font=dict(size=14)), **CHART_LAYOUT)
+    fig.update_layout(title=dict(text=title, font=dict(size=14)), showlegend=True, **CHART_LAYOUT)
     return fig
 
 
 def build_chart_data(df: pd.DataFrame) -> dict:
-    """
-    Aggregate snapshot data into per-day series for all four charts.
-    Returns a dict of DataFrames ready to plot.
-    """
+    """Aggregate snapshot rows into per-day series for the four line charts."""
     if df.empty:
         empty = pd.DataFrame(columns=["date"])
         return {
@@ -130,23 +124,16 @@ def build_chart_data(df: pd.DataFrame) -> dict:
     by_date = df.groupby("date")
 
     seller_count = (
-        by_date["seller_id"].nunique().reset_index().rename(columns={"seller_id": "seller_count"})
+        by_date["seller_id"].nunique().reset_index()
+        .rename(columns={"seller_id": "seller_count"})
     )
-
-    offer_count = (
-        by_date.size().reset_index(name="offer_count")
-    )
-
-    inventory = (
-        by_date["inventory_est"].sum().reset_index()
-    )
+    offer_count = by_date.size().reset_index(name="offer_count")
+    inventory = by_date["inventory_est"].sum().reset_index()
 
     fba_fbm = (
         df.groupby(["date", "fulfillment"]).size()
-        .unstack(fill_value=0)
-        .reset_index()
+        .unstack(fill_value=0).reset_index()
     )
-    # Ensure both columns exist even if one fulfillment type is absent
     for col in ["FBA", "FBM"]:
         if col not in fba_fbm.columns:
             fba_fbm[col] = 0
@@ -160,10 +147,67 @@ def build_chart_data(df: pd.DataFrame) -> dict:
     }
 
 
+def build_seller_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate latest-day snapshot into a by-seller summary table."""
+    if df.empty:
+        return pd.DataFrame(columns=["Seller ID", "# Offers", "# Unique ASINs", "Total Est. Stock"])
+    latest = df[df["date"] == df["date"].max()]
+    agg = (
+        latest.groupby("seller_id")
+        .agg(
+            offers=("asin", "count"),
+            unique_asins=("asin", "nunique"),
+            total_stock=("inventory_est", "sum"),
+        )
+        .reset_index()
+        .sort_values("offers", ascending=False)
+        .rename(columns={
+            "seller_id": "Seller ID",
+            "offers": "# Offers",
+            "unique_asins": "# Unique ASINs",
+            "total_stock": "Total Est. Stock",
+        })
+    )
+    agg["Total Est. Stock"] = agg["Total Est. Stock"].fillna(0).astype(int)
+    return agg.reset_index(drop=True)
+
+
+def build_asin_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate latest-day snapshot into a by-ASIN summary table."""
+    if df.empty:
+        return pd.DataFrame(columns=["ASIN", "Product", "# 3P Sellers", "# 3P Offers", "Total 3P Inventory"])
+    latest = df[df["date"] == df["date"].max()]
+    agg = (
+        latest.groupby(["asin", "product_name"])
+        .agg(
+            sellers=("seller_id", "nunique"),
+            offers=("seller_id", "count"),
+            total_inventory=("inventory_est", "sum"),
+        )
+        .reset_index()
+        .sort_values("offers", ascending=False)
+        .rename(columns={
+            "asin": "ASIN",
+            "product_name": "Product",
+            "sellers": "# 3P Sellers",
+            "offers": "# 3P Offers",
+            "total_inventory": "Total 3P Inventory",
+        })
+    )
+    agg["Total 3P Inventory"] = agg["Total 3P Inventory"].fillna(0).astype(int)
+    return agg.reset_index(drop=True)
+
+
 # ── Load data ───────────────────────────────────────────────────────────────────
 asins_df = load_asins()
 snapshots_df = load_snapshots()
 has_snapshot_data = len(snapshots_df) > 0
+
+# ── Session state — drill-down filter ───────────────────────────────────────────
+if "drill_type" not in st.session_state:
+    st.session_state.drill_type = None   # "seller" | "asin" | None
+if "drill_value" not in st.session_state:
+    st.session_state.drill_value = None
 
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────────
@@ -172,17 +216,14 @@ with st.sidebar:
     st.caption("Unauthorized seller monitoring · MAP compliance · Grey market detection")
     st.divider()
 
-    # Tag filter
     all_tags = sorted(asins_df["tag"].dropna().unique().tolist())
     tag_options = ["All"] + all_tags
     selected_tag = st.selectbox("Filter by tag", tag_options, index=0)
 
-    # Time range
     time_range = st.radio("Time range", [30, 60, 90], index=2, format_func=lambda x: f"{x} days")
 
     st.divider()
 
-    # Last updated
     if has_snapshot_data:
         last_date = snapshots_df["date"].max()
         st.caption(f"**Last snapshot:** {last_date.strftime('%b %d, %Y')}")
@@ -196,18 +237,22 @@ with st.sidebar:
 filtered_snaps = snapshots_df.copy()
 
 if has_snapshot_data:
-    # Tag filter
     if selected_tag != "All":
         filtered_snaps = filtered_snaps[filtered_snaps["tag"] == selected_tag]
 
-    # Time range filter
     cutoff = snapshots_df["date"].max() - pd.Timedelta(days=time_range)
     filtered_snaps = filtered_snaps[filtered_snaps["date"] >= cutoff]
 
-    # Latest day slice (for metric cards)
     latest = filtered_snaps[filtered_snaps["date"] == filtered_snaps["date"].max()]
 else:
     latest = pd.DataFrame()
+
+# ── Apply drill-down filter to chart data ────────────────────────────────────────
+chart_snaps = filtered_snaps.copy()
+if st.session_state.drill_type == "seller" and st.session_state.drill_value:
+    chart_snaps = chart_snaps[chart_snaps["seller_id"] == st.session_state.drill_value]
+elif st.session_state.drill_type == "asin" and st.session_state.drill_value:
+    chart_snaps = chart_snaps[chart_snaps["asin"] == st.session_state.drill_value]
 
 
 # ── Main content ────────────────────────────────────────────────────────────────
@@ -215,7 +260,6 @@ st.title("Brand Channel Intelligence")
 st.caption("Third-party seller monitoring across tracked ASINs · New condition · 3P only")
 st.divider()
 
-# ── No data state ───────────────────────────────────────────────────────────────
 if not has_snapshot_data:
     st.info(
         "**No snapshot data yet.** Run `python fetch_snapshot.py --limit 3` locally to pull the "
@@ -223,9 +267,8 @@ if not has_snapshot_data:
         "The GitHub Action will take over from there.",
         icon="ℹ️",
     )
-
-# ── Metric cards ────────────────────────────────────────────────────────────────
 else:
+    # ── Metric cards ─────────────────────────────────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("3P Sellers (latest)", latest["seller_id"].nunique())
     col2.metric("3P Offers (latest)", len(latest))
@@ -233,16 +276,29 @@ else:
         "Total Est. Inventory",
         f"{int(latest['inventory_est'].sum()):,}" if latest["inventory_est"].notna().any() else "—",
     )
-    fba_count = len(latest[latest["fulfillment"] == "FBA"])
-    fbm_count = len(latest[latest["fulfillment"] == "FBM"])
-    col4.metric("FBA / FBM", f"{fba_count} / {fbm_count}")
+    fba_c = len(latest[latest["fulfillment"] == "FBA"])
+    fbm_c = len(latest[latest["fulfillment"] == "FBM"])
+    col4.metric("FBA / FBM", f"{fba_c} / {fbm_c}")
 
     st.divider()
 
-    # ── Four line charts ─────────────────────────────────────────────────────────
-    chart_data = build_chart_data(filtered_snaps)
+    # ── Active drill-down banner ──────────────────────────────────────────────────
+    if st.session_state.drill_type and st.session_state.drill_value:
+        label = (
+            f"Seller: {st.session_state.drill_value}"
+            if st.session_state.drill_type == "seller"
+            else f"ASIN: {st.session_state.drill_value}"
+        )
+        banner_col, clear_col = st.columns([8, 1])
+        banner_col.info(f"**Viewing:** {label}", icon="🔍")
+        if clear_col.button("Clear", use_container_width=True):
+            st.session_state.drill_type = None
+            st.session_state.drill_value = None
+            st.rerun()
 
-    # Only one day of data — warn but still render (charts will show a single point)
+    # ── Four line charts ──────────────────────────────────────────────────────────
+    chart_data = build_chart_data(chart_snaps)
+
     if filtered_snaps["date"].nunique() == 1:
         st.info(
             "Only one day of snapshot data is available so far. "
@@ -250,28 +306,28 @@ else:
             icon="📅",
         )
 
-    row1_left, row1_right = st.columns(2)
-    with row1_left:
+    r1a, r1b = st.columns(2)
+    with r1a:
         st.plotly_chart(
             line_chart(chart_data["seller_count"], "seller_count",
                        "3P Seller Count", CHART_COLORS["primary"], "Sellers"),
             use_container_width=True,
         )
-    with row1_right:
+    with r1b:
         st.plotly_chart(
             line_chart(chart_data["offer_count"], "offer_count",
                        "3P Offer Count", CHART_COLORS["primary"], "Offers"),
             use_container_width=True,
         )
 
-    row2_left, row2_right = st.columns(2)
-    with row2_left:
+    r2a, r2b = st.columns(2)
+    with r2a:
         st.plotly_chart(
             line_chart(chart_data["inventory"], "inventory_est",
                        "Total 3P Inventory (Est.)", CHART_COLORS["secondary"], "Units"),
             use_container_width=True,
         )
-    with row2_right:
+    with r2b:
         st.plotly_chart(
             fba_fbm_chart(chart_data["fba_fbm"], "FBA vs FBM Offers"),
             use_container_width=True,
@@ -279,11 +335,71 @@ else:
 
     st.divider()
 
-    # ── Placeholder for Phase 4 toggle table ────────────────────────────────────
-    st.info("📊 Seller / ASIN toggle table coming in Phase 4.", icon="🔧")
+    # ── Toggle table: By Seller / By ASIN ────────────────────────────────────────
+    toggle_col, _ = st.columns([3, 5])
+    with toggle_col:
+        table_view = st.radio(
+            "View by",
+            ["Seller", "ASIN"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+    if table_view == "Seller":
+        seller_table = build_seller_table(filtered_snaps)
+        st.caption("Click a row to filter all charts to that seller.")
+        sel = st.dataframe(
+            seller_table,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config={
+                "Seller ID": st.column_config.TextColumn("Seller ID"),
+                "# Offers": st.column_config.NumberColumn("# Offers"),
+                "# Unique ASINs": st.column_config.NumberColumn("# Unique ASINs"),
+                "Total Est. Stock": st.column_config.NumberColumn("Total Est. Stock", format="%d"),
+            },
+        )
+        # Handle row selection
+        rows = sel.selection.rows if sel and sel.selection else []
+        if rows:
+            chosen_seller = seller_table.iloc[rows[0]]["Seller ID"]
+            if (st.session_state.drill_type != "seller"
+                    or st.session_state.drill_value != chosen_seller):
+                st.session_state.drill_type = "seller"
+                st.session_state.drill_value = chosen_seller
+                st.rerun()
+
+    else:  # ASIN view
+        asin_table = build_asin_table(filtered_snaps)
+        st.caption("Click a row to filter all charts to that ASIN.")
+        sel = st.dataframe(
+            asin_table,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config={
+                "ASIN": st.column_config.TextColumn("ASIN"),
+                "Product": st.column_config.TextColumn("Product"),
+                "# 3P Sellers": st.column_config.NumberColumn("# 3P Sellers"),
+                "# 3P Offers": st.column_config.NumberColumn("# 3P Offers"),
+                "Total 3P Inventory": st.column_config.NumberColumn("Total 3P Inventory", format="%d"),
+            },
+        )
+        rows = sel.selection.rows if sel and sel.selection else []
+        if rows:
+            chosen_asin = asin_table.iloc[rows[0]]["ASIN"]
+            if (st.session_state.drill_type != "asin"
+                    or st.session_state.drill_value != chosen_asin):
+                st.session_state.drill_type = "asin"
+                st.session_state.drill_value = chosen_asin
+                st.rerun()
 
 
 # ── ASIN Manager ────────────────────────────────────────────────────────────────
+st.divider()
 with st.expander("📋 Tracked ASINs", expanded=not has_snapshot_data):
     st.caption(
         "Read-only view. To add or remove ASINs, edit `data/target_asins.csv` in the repo and redeploy."
