@@ -157,26 +157,92 @@ def fba_fbm_chart(df_daily: pd.DataFrame, title: str) -> go.Figure:
     return fig
 
 
-def build_chart_data(df: pd.DataFrame) -> dict:
-    """Aggregate snapshot rows into per-day series for the four line charts."""
+def dual_line_chart(
+    df_daily: pd.DataFrame,
+    total_col: str,
+    disruptive_col: str,
+    title: str,
+    total_label: str,
+    disruptive_label: str,
+) -> go.Figure:
+    """Two-line chart: total (muted) vs disruptive (orange) over time."""
+    fig = go.Figure()
+    # Total — muted blue, dashed
+    fig.add_trace(go.Scatter(
+        x=df_daily["date"],
+        y=df_daily[total_col],
+        mode="lines+markers",
+        line=dict(color=CHART_COLORS["primary"], width=2, dash="dot"),
+        marker=dict(size=4),
+        name=total_label,
+        hovertemplate=f"{total_label}: %{{y}}<extra></extra>",
+    ))
+    # Disruptive — orange, solid, slightly thicker
+    fig.add_trace(go.Scatter(
+        x=df_daily["date"],
+        y=df_daily[disruptive_col],
+        mode="lines+markers",
+        line=dict(color=CHART_COLORS["secondary"], width=2.5),
+        marker=dict(size=5),
+        name=disruptive_label,
+        hovertemplate=f"{disruptive_label}: %{{y}}<extra></extra>",
+    ))
+    fig.update_layout(title=dict(text=title, font=dict(size=14)), showlegend=True, **CHART_LAYOUT)
+    return fig
+
+
+def build_chart_data(df: pd.DataFrame, total_asin_count: int) -> dict:
+    """
+    Aggregate snapshot rows into per-day series for all six line charts.
+
+    'Disruptive' = any offer where map_variance_pct < 0 (priced below MAP).
+
+    Charts produced:
+      seller_count  — total sellers vs disruptive sellers per day
+      offer_count   — total offers vs disruptive offers per day
+      inventory     — total 3P inventory per day
+      fba_fbm       — FBA vs FBM offer counts per day
+      pct_clean     — % of tracked ASINs with zero below-MAP offers per day
+      disruption_ts — sum of disruption_score per day
+    """
     if df.empty:
         empty = pd.DataFrame(columns=["date"])
         return {
-            "seller_count": empty.assign(seller_count=[]),
-            "offer_count": empty.assign(offer_count=[]),
+            "seller_count": empty.assign(seller_count=[], disruptive_seller_count=[]),
+            "offer_count": empty.assign(offer_count=[], disruptive_offer_count=[]),
             "inventory": empty.assign(inventory_est=[]),
             "fba_fbm": empty.assign(fba_count=[], fbm_count=[]),
+            "pct_clean": empty.assign(pct_clean=[]),
+            "disruption_ts": empty.assign(disruption_score=[]),
         }
 
     by_date = df.groupby("date")
+    is_disruptive = df["map_variance_pct"].notna() & (df["map_variance_pct"] < 0)
 
-    seller_count = (
+    # ── Seller count: total vs disruptive ──
+    total_sellers = (
         by_date["seller_id"].nunique().reset_index()
         .rename(columns={"seller_id": "seller_count"})
     )
-    offer_count = by_date.size().reset_index(name="offer_count")
+    disruptive_sellers = (
+        df[is_disruptive].groupby("date")["seller_id"].nunique().reset_index()
+        .rename(columns={"seller_id": "disruptive_seller_count"})
+    )
+    seller_count = total_sellers.merge(disruptive_sellers, on="date", how="left").fillna(0)
+    seller_count["disruptive_seller_count"] = seller_count["disruptive_seller_count"].astype(int)
+
+    # ── Offer count: total vs disruptive ──
+    total_offers = by_date.size().reset_index(name="offer_count")
+    disruptive_offers = (
+        df[is_disruptive].groupby("date").size().reset_index(name="disruptive_offer_count")
+    )
+    offer_count = total_offers.merge(disruptive_offers, on="date", how="left").fillna(0)
+    offer_count["disruptive_offer_count"] = offer_count["disruptive_offer_count"].astype(int)
+
+    # ── Inventory ──
     inventory = by_date["inventory_est"].sum().reset_index()
 
+    # ── FBA vs FBM ──
     fba_fbm = (
         df.groupby(["date", "fulfillment"]).size()
         .unstack(fill_value=0).reset_index()
@@ -186,11 +252,31 @@ def build_chart_data(df: pd.DataFrame) -> dict:
             fba_fbm[col] = 0
     fba_fbm = fba_fbm.rename(columns={"FBA": "fba_count", "FBM": "fbm_count"})
 
+    # ── % Assortment Clean ──
+    # Denominator: total_asin_count (all tracked ASINs, fixed)
+    # Numerator: ASINs that had ZERO below-MAP offers on that day
+    disrupted_asins_per_day = (
+        df[is_disruptive].groupby("date")["asin"].nunique().reset_index()
+        .rename(columns={"asin": "disrupted_asin_count"})
+    )
+    all_dates = pd.DataFrame({"date": df["date"].unique()})
+    pct_clean = all_dates.merge(disrupted_asins_per_day, on="date", how="left").fillna(0)
+    pct_clean["pct_clean"] = (
+        (total_asin_count - pct_clean["disrupted_asin_count"]) / total_asin_count * 100
+    ).clip(0, 100).round(1)
+
+    # ── Disruption score over time ──
+    disruption_ts = (
+        by_date["disruption_score"].sum().reset_index()
+    )
+
     return {
         "seller_count": seller_count,
         "offer_count": offer_count,
         "inventory": inventory,
         "fba_fbm": fba_fbm,
+        "pct_clean": pct_clean,
+        "disruption_ts": disruption_ts,
     }
 
 
@@ -364,8 +450,13 @@ else:
             st.session_state.drill_value = None
             st.rerun()
 
-    # ── Four line charts ──────────────────────────────────────────────────────────
-    chart_data = build_chart_data(chart_snaps)
+    # ── Six line charts ───────────────────────────────────────────────────────────
+    # total_asin_count: denominator for % clean (all tracked ASINs in the filtered set)
+    total_asin_count = (
+        filtered_snaps["asin"].nunique() if not filtered_snaps.empty
+        else len(asins_df)
+    )
+    chart_data = build_chart_data(chart_snaps, total_asin_count)
 
     if filtered_snaps["date"].nunique() == 1:
         st.info(
@@ -374,20 +465,28 @@ else:
             icon="📅",
         )
 
+    # Row 1: seller count (total vs disruptive) | offer count (total vs disruptive)
     r1a, r1b = st.columns(2)
     with r1a:
         st.plotly_chart(
-            line_chart(chart_data["seller_count"], "seller_count",
-                       "3P Seller Count", CHART_COLORS["primary"], "Sellers"),
+            dual_line_chart(
+                chart_data["seller_count"],
+                "seller_count", "disruptive_seller_count",
+                "3P Seller Count", "Total Sellers", "Disruptive Sellers",
+            ),
             use_container_width=True,
         )
     with r1b:
         st.plotly_chart(
-            line_chart(chart_data["offer_count"], "offer_count",
-                       "3P Offer Count", CHART_COLORS["primary"], "Offers"),
+            dual_line_chart(
+                chart_data["offer_count"],
+                "offer_count", "disruptive_offer_count",
+                "3P Offer Count", "Total Offers", "Disruptive Offers",
+            ),
             use_container_width=True,
         )
 
+    # Row 2: total inventory | FBA vs FBM
     r2a, r2b = st.columns(2)
     with r2a:
         st.plotly_chart(
@@ -398,6 +497,21 @@ else:
     with r2b:
         st.plotly_chart(
             fba_fbm_chart(chart_data["fba_fbm"], "FBA vs FBM Offers"),
+            use_container_width=True,
+        )
+
+    # Row 3: % assortment clean | disruption score over time
+    r3a, r3b = st.columns(2)
+    with r3a:
+        st.plotly_chart(
+            line_chart(chart_data["pct_clean"], "pct_clean",
+                       "% of Assortment Clean", "#22A55A", "%"),
+            use_container_width=True,
+        )
+    with r3b:
+        st.plotly_chart(
+            line_chart(chart_data["disruption_ts"], "disruption_score",
+                       "Disruption Score Over Time", CHART_COLORS["secondary"], "Score"),
             use_container_width=True,
         )
 
