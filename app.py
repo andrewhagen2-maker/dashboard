@@ -342,14 +342,14 @@ def build_seller_table(df: pd.DataFrame, name_map: dict[str, str]) -> pd.DataFra
 def build_asin_table(df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate latest-day snapshot into a by-ASIN summary table."""
     if df.empty:
-        return pd.DataFrame(columns=["ASIN", "Product", "# 3P Sellers", "# 3P Offers", "Total 3P Inventory", "Avg Discount %", "Disruption Score"])
+        return pd.DataFrame(columns=["ASIN", "Product", "# 3P Sellers", "# 3P Offers", "Disruptive 3P Inventory", "Avg Discount %", "Disruption Score"])
     latest = df[df["date"] == df["date"].max()]
     agg = (
         latest.groupby(["asin", "product_name"])
         .agg(
             sellers=("seller_id", "nunique"),
             offers=("seller_id", "count"),
-            total_inventory=("inventory_est", "sum"),
+            total_inventory=("inventory_est", lambda x: x[latest.loc[x.index, "map_variance_pct"] < 0].sum()),
             avg_discount=("map_variance_pct", lambda x: x[x < 0].mean()),
             disruption=("disruption_score", "sum"),
         )
@@ -360,12 +360,12 @@ def build_asin_table(df: pd.DataFrame) -> pd.DataFrame:
             "product_name": "Product",
             "sellers": "# 3P Sellers",
             "offers": "# 3P Offers",
-            "total_inventory": "Total 3P Inventory",
+            "total_inventory": "Disruptive 3P Inventory",
             "avg_discount": "Avg Discount %",
             "disruption": "Disruption Score",
         })
     )
-    agg["Total 3P Inventory"] = agg["Total 3P Inventory"].fillna(0).astype(int)
+    agg["Disruptive 3P Inventory"] = agg["Disruptive 3P Inventory"].fillna(0).astype(int)
     agg["Disruption Score"] = agg["Disruption Score"].fillna(0).round(1)
     agg["Avg Discount %"] = agg["Avg Discount %"].round(1)
     return agg.reset_index(drop=True)
@@ -605,7 +605,7 @@ else:
                 "Product": st.column_config.TextColumn("Product"),
                 "# 3P Sellers": st.column_config.NumberColumn("# 3P Sellers"),
                 "# 3P Offers": st.column_config.NumberColumn("# 3P Offers"),
-                "Total 3P Inventory": st.column_config.NumberColumn("Total 3P Inventory", format="%d"),
+                "Disruptive 3P Inventory": st.column_config.NumberColumn("Disruptive 3P Inventory", format="%d"),
                 "Avg Discount %": st.column_config.NumberColumn("Avg Discount %", format="%.1f%%"),
                 "Disruption Score": st.column_config.NumberColumn("Disruption Score", format="%.1f"),
             },
