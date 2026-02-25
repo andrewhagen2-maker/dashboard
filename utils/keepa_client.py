@@ -163,8 +163,20 @@ def get_seller_names(seller_ids: list[str]) -> dict[str, str]:
 
 
 def token_status() -> dict:
-    """Return remaining Keepa API tokens for the current key."""
+    """
+    Return remaining Keepa API tokens for the current key.
+
+    api.tokens_left is only populated after an API call is made (it comes from
+    response headers). To get a fresh count at any point, we make a minimal
+    seller query with an empty list — zero cost, updates the counter.
+    """
     api = _get_api()
+    try:
+        # Empty seller query: costs 0 tokens, but forces a round-trip that
+        # populates api.tokens_left from the response headers.
+        api.seller([])
+    except Exception:
+        pass  # non-fatal — fall through to whatever value is cached
     return {
         "tokens_left": api.tokens_left,
     }
