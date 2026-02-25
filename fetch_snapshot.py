@@ -53,6 +53,7 @@ SNAPSHOT_HEADERS = [
     "ships_from_country",
     "is_map",
     "is_prime",
+    "is_1p",
 ]
 
 # Keepa seller ID for Amazon retail (1P) — excluded from snapshots
@@ -173,6 +174,7 @@ def run():
                 "ships_from_country": "CN" if offer["ships_from_china"] else "US",
                 "is_map": offer["is_map"],
                 "is_prime": offer["is_prime"],
+                "is_1p": offer["is_1p"],
             }
             new_rows.append(row)
             asin_rows_added += 1

@@ -65,6 +65,11 @@ def load_snapshots() -> pd.DataFrame:
         df["is_map"] = df["is_map"].astype(str).str.lower().map({"true": True, "false": False})
     if "is_prime" in df.columns:
         df["is_prime"] = df["is_prime"].astype(str).str.lower().map({"true": True, "false": False})
+    if "is_1p" in df.columns:
+        df["is_1p"] = df["is_1p"].astype(str).str.lower().map({"true": True, "false": False}).fillna(False)
+    else:
+        # Backwards-compatible: old snapshots without the column are assumed 3P
+        df["is_1p"] = False
     return df
 
 
@@ -418,6 +423,10 @@ if has_snapshot_data:
 
     cutoff = snapshots_df["date"].max() - pd.Timedelta(days=time_range)
     filtered_snaps = filtered_snaps[filtered_snaps["date"] >= cutoff]
+
+    # Charts and tables always show 3P only; 1P rows are stored in the snapshot
+    # for reference but excluded from all display logic here.
+    filtered_snaps = filtered_snaps[filtered_snaps["is_1p"] == False]
 
     latest = filtered_snaps[filtered_snaps["date"] == filtered_snaps["date"].max()]
 else:

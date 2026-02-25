@@ -29,9 +29,7 @@ jobs:
       - name: Run fetch_snapshot.py
         env:
           KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
-        # --limit 3: dev mode — only first 3 ASINs to stay within 60 token/hr tier.
-        # Remove --limit when upgrading to a higher Keepa API tier.
-        run: python fetch_snapshot.py --limit 3
+        run: python fetch_snapshot.py
 
       - name: Commit and push updated snapshots.csv
         run: |

@@ -86,10 +86,8 @@ def extract_live_offers(product: dict) -> list[dict]:
 
         offer = all_offers[idx]
 
-        # Skip Amazon 1P
         seller_id = offer.get("sellerId", "")
-        if seller_id == AMAZON_SELLER_ID:
-            continue
+        is_1p = seller_id == AMAZON_SELLER_ID
 
         # Skip non-New condition (condition 1 = New)
         if offer.get("condition", 0) != 1:
@@ -119,6 +117,7 @@ def extract_live_offers(product: dict) -> list[dict]:
 
         results.append({
             "seller_id": seller_id,
+            "is_1p": is_1p,
             "is_fba": bool(offer.get("isFBA", False)),
             "ships_from_china": bool(offer.get("shipsFromChina", False)),
             "is_map": bool(offer.get("isMAP", False)),
