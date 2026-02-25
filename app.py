@@ -83,10 +83,9 @@ def enrich_snapshots(snaps: pd.DataFrame, asins: pd.DataFrame) -> pd.DataFrame:
                           positive = above MAP (overpricing)
 
       disruption_score  — inventory-weighted discount severity
-                          formula: inventory_est × (|discount_pct| / 100) ^ 1.5 × 10,000
+                          formula: inventory_est × |discount_pct|
+                          e.g. 500 units at 15% below MAP → score of 75
                           only computed for below-MAP offers; 0 otherwise
-                          ^1.5 exponent: non-linear — deep discounts score
-                          disproportionately higher than shallow ones.
     """
     if snaps.empty:
         snaps["map_price"] = pd.NA
@@ -109,10 +108,9 @@ def enrich_snapshots(snaps: pd.DataFrame, asins: pd.DataFrame) -> pd.DataFrame:
     below_map = df["map_variance_pct"].notna() & (df["map_variance_pct"] < 0)
     has_inventory = df["inventory_est"].notna() & (df["inventory_est"] > 0)
 
-    discount_fraction = (df["map_variance_pct"].abs() / 100)
     df["disruption_score"] = np.where(
         below_map & has_inventory,
-        (df["inventory_est"] * discount_fraction ** 1.5 * 10_000).round(0),
+        (df["inventory_est"] * df["map_variance_pct"].abs()).round(1),
         0,
     )
 
@@ -447,7 +445,7 @@ st.divider()
 
 if not has_snapshot_data:
     st.info(
-        "**No snapshot data yet.** Run `python fetch_snapshot.py --limit 3` locally to pull the "
+        "**No snapshot data yet.** Run `python fetch_snapshot.py` locally to pull the "
         "first day of data, then commit `data/cache/snapshots.csv` to the repo. "
         "The GitHub Action will take over from there.",
         icon="ℹ️",
