@@ -10,7 +10,7 @@ Built as a portfolio project demonstrating brand protection and distribution hyg
 
 ## What it does
 
-- Tracks 3P seller activity across a monitored ASIN list (currently Yeti and Crocs products)
+- Tracks 3P seller activity across a monitored ASIN list (currently Yeti, Crocs, and LEGO products)
 - Flags sellers pricing below MAP and computes a per-seller disruption score weighted by inventory depth
 - Shows FBA vs FBM fulfillment breakdown and estimated stock levels
 - Provides a toggle table — drill down by seller or by ASIN — with row-click filtering across all charts
@@ -83,14 +83,15 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env and add your KEEPA_API_KEY
 
-# Pull a snapshot manually (--limit 3 = first 3 ASINs only, for dev)
-python fetch_snapshot.py --limit 3
+# Pull a snapshot manually (all ASINs)
+python fetch_snapshot.py
+
+# Pull a snapshot for the first N ASINs only (useful for dev/testing)
+python fetch_snapshot.py --limit 5
 
 # Run the dashboard
 streamlit run app.py
 ```
-
-Remove `--limit 3` to pull all ASINs. See the token note below before doing that.
 
 ---
 
@@ -98,9 +99,7 @@ Remove `--limit 3` to pull all ASINs. See the token note below before doing that
 
 The workflow at `.github/workflows/daily_snapshot.yml` runs `fetch_snapshot.py` at 6am UTC daily, commits the updated `snapshots.csv` and `seller_names.csv` back to the repo, and triggers a Streamlit Cloud redeploy.
 
-The `KEEPA_API_KEY` is stored as a GitHub Actions secret — it is never committed to the repo.
-
-**Token note:** The Action currently runs with `--limit 3` (dev mode, compatible with Keepa's entry-tier rate limits). To pull all ASINs, remove `--limit 3` from the `run:` line in `daily_snapshot.yml` after upgrading to a higher Keepa API tier. No other changes needed.
+The `KEEPA_API_KEY` is stored as a GitHub Actions secret — it is never committed to the repo. Token budget is managed automatically: `fetch_snapshot.py` pauses and waits for refill if the token bank drops below the minimum threshold before moving to the next ASIN.
 
 ---
 
