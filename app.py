@@ -606,7 +606,11 @@ else:
                 "# 3P Sellers": st.column_config.NumberColumn("# 3P Sellers"),
                 "# 3P Offers": st.column_config.NumberColumn("# 3P Offers"),
                 "Disruptive 3P Inventory": st.column_config.NumberColumn("Disruptive 3P Inventory", format="%d"),
-                "Avg Discount %": st.column_config.NumberColumn("Avg Discount %", format="%.1f%%"),
+                "Avg Discount %": st.column_config.NumberColumn(
+                    "Avg Discount %",
+                    format="%.1f%%",
+                    help="Average discount depth across below-MAP offers only (excludes at- or above-MAP sellers)",
+                ),
                 "Disruption Score": st.column_config.NumberColumn("Disruption Score", format="%.1f"),
             },
         )
