@@ -83,9 +83,11 @@ def enrich_snapshots(snaps: pd.DataFrame, asins: pd.DataFrame) -> pd.DataFrame:
                           positive = above MAP (overpricing)
 
       disruption_score  — inventory-weighted discount severity
-                          formula: inventory_est × |discount_pct|
-                          e.g. 500 units at 15% below MAP → score of 75
-                          only computed for below-MAP offers; 0 otherwise
+                          formula: inventory_est × |discount_pct| ^ 1.5
+                          e.g. 500 units at 15% below MAP → score of ~29,000
+                          non-linear: deep discounts score disproportionately
+                          higher than shallow ones. Only computed for
+                          below-MAP offers; 0 otherwise.
     """
     if snaps.empty:
         snaps["map_price"] = pd.NA
@@ -110,7 +112,7 @@ def enrich_snapshots(snaps: pd.DataFrame, asins: pd.DataFrame) -> pd.DataFrame:
 
     df["disruption_score"] = np.where(
         below_map & has_inventory,
-        (df["inventory_est"] * df["map_variance_pct"].abs()).round(1),
+        (df["inventory_est"] * df["map_variance_pct"].abs() ** 1.5).round(0),
         0,
     )
 
