@@ -130,6 +130,38 @@ def extract_live_offers(product: dict) -> list[dict]:
     return results
 
 
+def get_seller_names(seller_ids: list[str]) -> dict[str, str]:
+    """
+    Look up seller display names for a list of seller IDs via the Keepa
+    seller API. Returns a dict of {seller_id: seller_name}.
+
+    Unknown or failed lookups are omitted from the result — the caller
+    should handle missing keys gracefully (fall back to seller_id).
+
+    Token cost: low — typically 1 token per seller, batched in one call.
+    """
+    if not seller_ids:
+        return {}
+
+    api = _get_api()
+    try:
+        sellers = api.seller(seller_ids)
+    except Exception as exc:
+        print(f"[keepa_client] ERROR looking up seller names: {exc}")
+        return {}
+
+    result = {}
+    for sid, data in sellers.items():
+        if data is None:
+            continue
+        # Keepa returns 'sellerName' in the seller profile object
+        name = data.get("sellerName") or data.get("name")
+        if name:
+            result[sid] = str(name).strip()
+
+    return result
+
+
 def token_status() -> dict:
     """Return remaining Keepa API tokens for the current key."""
     api = _get_api()

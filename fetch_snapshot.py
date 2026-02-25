@@ -31,10 +31,12 @@ import pandas as pd
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
-from utils.keepa_client import get_product_with_offers, extract_live_offers, token_status
+from utils.keepa_client import get_product_with_offers, extract_live_offers, get_seller_names, token_status
 
 ASINS_FILE = ROOT / "data" / "target_asins.csv"
 SNAPSHOTS_FILE = ROOT / "data" / "cache" / "snapshots.csv"
+SELLER_NAMES_FILE = ROOT / "data" / "seller_names.csv"
+SELLER_NAMES_HEADERS = ["seller_id", "seller_name", "first_seen"]
 
 SNAPSHOT_HEADERS = [
     "date",
@@ -188,6 +190,44 @@ def run():
 
     if errors:
         print(f"\nASINs with errors or no offers: {', '.join(errors)}")
+
+    # ── Seller name lookup ─────────────────────────────────────────────────────
+    # Load existing seller_names.csv (create if missing)
+    SELLER_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if SELLER_NAMES_FILE.exists() and SELLER_NAMES_FILE.stat().st_size > 0:
+        known_df = pd.read_csv(SELLER_NAMES_FILE, dtype=str)
+        known_df.columns = known_df.columns.str.strip()
+        known_ids = set(known_df["seller_id"].dropna().tolist())
+    else:
+        known_df = pd.DataFrame(columns=SELLER_NAMES_HEADERS)
+        known_ids = set()
+        with open(SELLER_NAMES_FILE, "w", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=SELLER_NAMES_HEADERS).writeheader()
+        print(f"Created new seller names file: {SELLER_NAMES_FILE}")
+
+    # Find seller IDs from this run that aren't already known
+    run_seller_ids = list({r["seller_id"] for r in new_rows if r.get("seller_id")})
+    new_seller_ids = [sid for sid in run_seller_ids if sid not in known_ids]
+
+    if new_seller_ids:
+        print(f"\nLooking up {len(new_seller_ids)} new seller name(s)...")
+        name_map = get_seller_names(new_seller_ids)
+        new_name_rows = []
+        for sid in new_seller_ids:
+            name = name_map.get(sid, "")
+            new_name_rows.append({
+                "seller_id": sid,
+                "seller_name": name,
+                "first_seen": today,
+            })
+            label = name if name else "(name not found)"
+            print(f"  {sid} → {label}")
+
+        with open(SELLER_NAMES_FILE, "a", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=SELLER_NAMES_HEADERS).writerows(new_name_rows)
+        print(f"✓ Appended {len(new_name_rows)} seller(s) to {SELLER_NAMES_FILE.name}")
+    else:
+        print(f"\nNo new seller IDs — seller_names.csv unchanged")
 
     # Final token status
     try:

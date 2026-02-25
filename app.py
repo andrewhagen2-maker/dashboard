@@ -26,6 +26,7 @@ st.set_page_config(
 ROOT = Path(__file__).parent
 ASINS_FILE = ROOT / "data" / "target_asins.csv"
 SNAPSHOTS_FILE = ROOT / "data" / "cache" / "snapshots.csv"
+SELLER_NAMES_FILE = ROOT / "data" / "seller_names.csv"
 
 
 # ── Data loaders ────────────────────────────────────────────────────────────────
@@ -34,6 +35,19 @@ def load_asins() -> pd.DataFrame:
     df = pd.read_csv(ASINS_FILE)
     df.columns = df.columns.str.strip()
     return df
+
+
+@st.cache_data(ttl=3600)
+def load_seller_names() -> dict[str, str]:
+    """Load seller_names.csv and return a {seller_id: seller_name} dict."""
+    if not SELLER_NAMES_FILE.exists():
+        return {}
+    df = pd.read_csv(SELLER_NAMES_FILE, dtype=str)
+    df.columns = df.columns.str.strip()
+    df = df.dropna(subset=["seller_id"])
+    # Only include rows where seller_name is non-empty
+    df = df[df["seller_name"].fillna("").str.strip() != ""]
+    return dict(zip(df["seller_id"], df["seller_name"]))
 
 
 @st.cache_data(ttl=3600)
@@ -285,10 +299,10 @@ def build_chart_data(df: pd.DataFrame, total_asin_count: int) -> dict:
     }
 
 
-def build_seller_table(df: pd.DataFrame) -> pd.DataFrame:
+def build_seller_table(df: pd.DataFrame, name_map: dict[str, str]) -> pd.DataFrame:
     """Aggregate latest-day snapshot into a by-seller summary table."""
     if df.empty:
-        return pd.DataFrame(columns=["Seller ID", "# Offers", "# Unique ASINs", "Total Est. Stock", "Avg Discount %", "Disruption Score"])
+        return pd.DataFrame(columns=["Seller Name", "Seller ID", "# Offers", "# Unique ASINs", "Total Est. Stock", "Avg Discount %", "Disruption Score"])
     latest = df[df["date"] == df["date"].max()]
     agg = (
         latest.groupby("seller_id")
@@ -313,7 +327,11 @@ def build_seller_table(df: pd.DataFrame) -> pd.DataFrame:
     agg["Total Est. Stock"] = agg["Total Est. Stock"].fillna(0).astype(int)
     agg["Disruption Score"] = agg["Disruption Score"].fillna(0).astype(int)
     agg["Avg Discount %"] = agg["Avg Discount %"].round(1)
-    return agg.reset_index(drop=True)
+    # Join seller name — fall back to seller ID if not yet resolved
+    agg["Seller Name"] = agg["Seller ID"].map(name_map).fillna("—")
+    # Reorder: name first, then ID for reference
+    cols = ["Seller Name", "Seller ID", "# Offers", "# Unique ASINs", "Total Est. Stock", "Avg Discount %", "Disruption Score"]
+    return agg[cols].reset_index(drop=True)
 
 
 def build_asin_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -351,6 +369,7 @@ def build_asin_table(df: pd.DataFrame) -> pd.DataFrame:
 # ── Load data ───────────────────────────────────────────────────────────────────
 asins_df = load_asins()
 snapshots_df = enrich_snapshots(load_snapshots(), asins_df)
+seller_names = load_seller_names()
 has_snapshot_data = len(snapshots_df) > 0
 
 # ── Session state — drill-down filter ───────────────────────────────────────────
@@ -535,7 +554,7 @@ else:
         )
 
     if table_view == "Seller":
-        seller_table = build_seller_table(filtered_snaps)
+        seller_table = build_seller_table(filtered_snaps, seller_names)
         st.caption("Click a row to filter all charts to that seller.")
         sel = st.dataframe(
             seller_table,
@@ -544,6 +563,7 @@ else:
             on_select="rerun",
             selection_mode="single-row",
             column_config={
+                "Seller Name": st.column_config.TextColumn("Seller Name"),
                 "Seller ID": st.column_config.TextColumn("Seller ID"),
                 "# Offers": st.column_config.NumberColumn("# Offers"),
                 "# Unique ASINs": st.column_config.NumberColumn("# Unique ASINs"),
