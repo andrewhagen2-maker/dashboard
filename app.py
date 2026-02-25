@@ -210,7 +210,7 @@ def build_chart_data(df: pd.DataFrame, total_asin_count: int) -> dict:
         return {
             "seller_count": empty.assign(seller_count=[], disruptive_seller_count=[]),
             "offer_count": empty.assign(offer_count=[], disruptive_offer_count=[]),
-            "inventory": empty.assign(inventory_est=[]),
+            "inventory": empty.assign(inventory_est=[], disruptive_inventory=[]),
             "fba_fbm": empty.assign(fba_count=[], fbm_count=[]),
             "pct_clean": empty.assign(pct_clean=[]),
             "disruption_ts": empty.assign(disruption_score=[]),
@@ -239,8 +239,13 @@ def build_chart_data(df: pd.DataFrame, total_asin_count: int) -> dict:
     offer_count = total_offers.merge(disruptive_offers, on="date", how="left").fillna(0)
     offer_count["disruptive_offer_count"] = offer_count["disruptive_offer_count"].astype(int)
 
-    # ── Inventory ──
-    inventory = by_date["inventory_est"].sum().reset_index()
+    # ── Inventory: total vs disruptive ──
+    total_inventory = by_date["inventory_est"].sum().reset_index()
+    disruptive_inventory = (
+        df[is_disruptive].groupby("date")["inventory_est"].sum().reset_index()
+        .rename(columns={"inventory_est": "disruptive_inventory"})
+    )
+    inventory = total_inventory.merge(disruptive_inventory, on="date", how="left").fillna(0)
 
     # ── FBA vs FBM ──
     fba_fbm = (
@@ -490,8 +495,11 @@ else:
     r2a, r2b = st.columns(2)
     with r2a:
         st.plotly_chart(
-            line_chart(chart_data["inventory"], "inventory_est",
-                       "Total 3P Inventory (Est.)", CHART_COLORS["secondary"], "Units"),
+            dual_line_chart(
+                chart_data["inventory"],
+                "inventory_est", "disruptive_inventory",
+                "3P Inventory (Est.)", "Total Inventory", "Disruptive Inventory",
+            ),
             use_container_width=True,
         )
     with r2b:
