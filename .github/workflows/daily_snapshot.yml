@@ -3,7 +3,7 @@ name: Daily Snapshot
 on:
   schedule:
     # Runs at 6:00 AM UTC every day
-    - cron: "0 6 * * *"
+    - cron: "59 11 * * *"
   workflow_dispatch:
     # Allow manual trigger from the GitHub Actions UI
 
