@@ -137,26 +137,33 @@ def get_seller_names(seller_ids: list[str]) -> dict[str, str]:
     Unknown or failed lookups are omitted from the result — the caller
     should handle missing keys gracefully (fall back to seller_id).
 
-    Token cost: low — typically 1 token per seller, batched in one call.
+    Keepa enforces a hard limit of 100 seller IDs per call — this function
+    batches automatically so callers never need to worry about list size.
+
+    Token cost: low — typically 1 token per seller.
     """
     if not seller_ids:
         return {}
 
     api = _get_api()
-    try:
-        sellers = api.seller_query(seller_ids)
-    except Exception as exc:
-        print(f"[keepa_client] ERROR looking up seller names: {exc}")
-        return {}
-
     result = {}
-    for sid, data in sellers.items():
-        if data is None:
+    BATCH_SIZE = 100
+
+    for i in range(0, len(seller_ids), BATCH_SIZE):
+        batch = seller_ids[i : i + BATCH_SIZE]
+        try:
+            sellers = api.seller_query(batch)
+        except Exception as exc:
+            print(f"[keepa_client] ERROR looking up seller names (batch {i//BATCH_SIZE + 1}): {exc}")
             continue
-        # Keepa returns 'sellerName' in the seller profile object
-        name = data.get("sellerName") or data.get("name")
-        if name:
-            result[sid] = str(name).strip()
+
+        for sid, data in sellers.items():
+            if data is None:
+                continue
+            # Keepa returns 'sellerName' in the seller profile object
+            name = data.get("sellerName") or data.get("name")
+            if name:
+                result[sid] = str(name).strip()
 
     return result
 

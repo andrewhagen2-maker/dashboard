@@ -25,6 +25,10 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
+# Force UTF-8 stdout on Windows so product names with special chars don't crash
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import pandas as pd
 
 # Allow running from any working directory
@@ -140,20 +144,20 @@ def run():
                 break
 
             wait_until = datetime.now().strftime("%H:%M:%S")
-            print(f"  ⏳ Token bank low ({available} left). Waiting {TOKEN_WAIT_SECONDS}s for refill... [{wait_until}]")
+            print(f"  [WAIT] Token bank low ({available} left). Waiting {TOKEN_WAIT_SECONDS}s for refill... [{wait_until}]")
             time.sleep(TOKEN_WAIT_SECONDS)
 
         product = get_product_with_offers(asin)
 
         if not product:
-            print(f"  → No product returned (API error or invalid ASIN)")
+            print(f"  -> No product returned (API error or invalid ASIN)")
             errors.append(asin)
             continue
 
         offers = extract_live_offers(product)
 
         if not offers:
-            print(f"  → No live 3P offers found")
+            print(f"  -> No live 3P offers found")
             errors.append(asin)
             continue
 
@@ -179,14 +183,14 @@ def run():
             new_rows.append(row)
             asin_rows_added += 1
 
-        print(f"  → {asin_rows_added} 3P seller rows captured")
+        print(f"  -> {asin_rows_added} rows captured")
 
     # Append all new rows to snapshots.csv
     if new_rows:
         with open(SNAPSHOTS_FILE, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=SNAPSHOT_HEADERS)
             writer.writerows(new_rows)
-        print(f"\n✓ Appended {len(new_rows)} rows to {SNAPSHOTS_FILE.name}")
+        print(f"\nOK: Appended {len(new_rows)} rows to {SNAPSHOTS_FILE.name}")
     else:
         print("\nWARNING: No rows written — check API key and ASIN list")
 
@@ -207,13 +211,29 @@ def run():
             csv.DictWriter(f, fieldnames=SELLER_NAMES_HEADERS).writeheader()
         print(f"Created new seller names file: {SELLER_NAMES_FILE}")
 
-    # Find seller IDs from this run that aren't already known
+    # Find seller IDs from this run that are either new or had blank names previously
     run_seller_ids = list({r["seller_id"] for r in new_rows if r.get("seller_id")})
-    new_seller_ids = [sid for sid in run_seller_ids if sid not in known_ids]
 
-    if new_seller_ids:
-        print(f"\nLooking up {len(new_seller_ids)} new seller name(s)...")
-        name_map = get_seller_names(new_seller_ids)
+    # Sellers with a blank name in the existing file — eligible for retry
+    if known_df is not None and not known_df.empty:
+        blank_name_ids = set(
+            known_df[known_df["seller_name"].fillna("").str.strip() == ""]["seller_id"].tolist()
+        )
+    else:
+        blank_name_ids = set()
+
+    # New IDs not in the file at all
+    new_seller_ids = [sid for sid in run_seller_ids if sid not in known_ids]
+    # Known IDs with blank names that appeared in this run — worth retrying
+    retry_seller_ids = [sid for sid in run_seller_ids if sid in blank_name_ids]
+
+    lookup_ids = new_seller_ids + retry_seller_ids
+
+    if lookup_ids:
+        print(f"\nLooking up {len(new_seller_ids)} new + {len(retry_seller_ids)} retry seller name(s)...")
+        name_map = get_seller_names(lookup_ids)
+
+        # Append new sellers (even if name is still blank — keeps ID on record)
         new_name_rows = []
         for sid in new_seller_ids:
             name = name_map.get(sid, "")
@@ -223,11 +243,30 @@ def run():
                 "first_seen": today,
             })
             label = name if name else "(name not found)"
-            print(f"  {sid} → {label}")
+            print(f"  [new] {sid} -> {label}")
 
-        with open(SELLER_NAMES_FILE, "a", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=SELLER_NAMES_HEADERS).writerows(new_name_rows)
-        print(f"✓ Appended {len(new_name_rows)} seller(s) to {SELLER_NAMES_FILE.name}")
+        if new_name_rows:
+            with open(SELLER_NAMES_FILE, "a", newline="", encoding="utf-8") as f:
+                csv.DictWriter(f, fieldnames=SELLER_NAMES_HEADERS).writerows(new_name_rows)
+            print(f"OK: Appended {len(new_name_rows)} new seller(s) to {SELLER_NAMES_FILE.name}")
+
+        # Update blank-name rows in-place by rewriting the file
+        if retry_seller_ids:
+            retry_resolved = {sid: name_map[sid] for sid in retry_seller_ids if sid in name_map}
+            if retry_resolved:
+                updated_df = pd.read_csv(SELLER_NAMES_FILE, dtype=str)
+                updated_df.columns = updated_df.columns.str.strip()
+                updated_df["seller_name"] = updated_df.apply(
+                    lambda row: retry_resolved.get(row["seller_id"], row["seller_name"]),
+                    axis=1,
+                )
+                updated_df.to_csv(SELLER_NAMES_FILE, index=False)
+                resolved_count = len(retry_resolved)
+                print(f"OK: Resolved {resolved_count} previously blank seller name(s)")
+                for sid, name in retry_resolved.items():
+                    print(f"  [retry] {sid} -> {name}")
+            else:
+                print(f"  {len(retry_seller_ids)} retry seller(s) still unresolved")
     else:
         print(f"\nNo new seller IDs — seller_names.csv unchanged")
 
