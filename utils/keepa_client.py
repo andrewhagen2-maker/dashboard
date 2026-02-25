@@ -133,7 +133,7 @@ def extract_live_offers(product: dict) -> list[dict]:
 def get_seller_names(seller_ids: list[str]) -> dict[str, str]:
     """
     Look up seller display names for a list of seller IDs via the Keepa
-    seller API. Returns a dict of {seller_id: seller_name}.
+    seller_query API. Returns a dict of {seller_id: seller_name}.
 
     Unknown or failed lookups are omitted from the result — the caller
     should handle missing keys gracefully (fall back to seller_id).
@@ -145,7 +145,7 @@ def get_seller_names(seller_ids: list[str]) -> dict[str, str]:
 
     api = _get_api()
     try:
-        sellers = api.seller(seller_ids)
+        sellers = api.seller_query(seller_ids)
     except Exception as exc:
         print(f"[keepa_client] ERROR looking up seller names: {exc}")
         return {}
@@ -166,15 +166,12 @@ def token_status() -> dict:
     """
     Return remaining Keepa API tokens for the current key.
 
-    api.tokens_left is only populated after an API call is made (it comes from
-    response headers). To get a fresh count at any point, we make a minimal
-    seller query with an empty list — zero cost, updates the counter.
+    api.tokens_left starts at 0 at init. Call api.update_status() first
+    to fetch the real count from the Keepa server (0 token cost).
     """
     api = _get_api()
     try:
-        # Empty seller query: costs 0 tokens, but forces a round-trip that
-        # populates api.tokens_left from the response headers.
-        api.seller([])
+        api.update_status()
     except Exception:
         pass  # non-fatal — fall through to whatever value is cached
     return {
