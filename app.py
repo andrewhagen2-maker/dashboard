@@ -8,6 +8,7 @@ Reads from data/cache/snapshots.csv only — never calls Keepa directly.
 Daily data is written by fetch_snapshot.py via GitHub Action.
 """
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -50,6 +51,52 @@ def load_snapshots() -> pd.DataFrame:
         df["is_map"] = df["is_map"].astype(str).str.lower().map({"true": True, "false": False})
     if "is_prime" in df.columns:
         df["is_prime"] = df["is_prime"].astype(str).str.lower().map({"true": True, "false": False})
+    return df
+
+
+# ── Enrichment ──────────────────────────────────────────────────────────────────
+def enrich_snapshots(snaps: pd.DataFrame, asins: pd.DataFrame) -> pd.DataFrame:
+    """
+    Join map_price from target_asins.csv into snapshots, then derive:
+
+      map_variance_pct  — signed % difference from MAP
+                          negative = below MAP (discounting)
+                          positive = above MAP (overpricing)
+
+      disruption_score  — inventory-weighted discount severity
+                          formula: inventory_est × (|discount_pct| / 100) ^ 1.5 × 10,000
+                          only computed for below-MAP offers; 0 otherwise
+                          ^1.5 exponent: non-linear — deep discounts score
+                          disproportionately higher than shallow ones.
+    """
+    if snaps.empty:
+        snaps["map_price"] = pd.NA
+        snaps["map_variance_pct"] = pd.NA
+        snaps["disruption_score"] = pd.NA
+        return snaps
+
+    # Join map_price — left join so all snapshot rows are preserved
+    map_lookup = asins[["asin", "map_price"]].drop_duplicates("asin")
+    df = snaps.merge(map_lookup, on="asin", how="left")
+
+    # Signed % variance from MAP
+    df["map_variance_pct"] = np.where(
+        df["map_price"].notna() & (df["map_price"] > 0) & df["price"].notna(),
+        ((df["price"] - df["map_price"]) / df["map_price"] * 100).round(2),
+        np.nan,
+    )
+
+    # Disruption score — only for below-MAP offers with known inventory
+    below_map = df["map_variance_pct"].notna() & (df["map_variance_pct"] < 0)
+    has_inventory = df["inventory_est"].notna() & (df["inventory_est"] > 0)
+
+    discount_fraction = (df["map_variance_pct"].abs() / 100)
+    df["disruption_score"] = np.where(
+        below_map & has_inventory,
+        (df["inventory_est"] * discount_fraction ** 1.5 * 10_000).round(0),
+        0,
+    )
+
     return df
 
 
@@ -150,7 +197,7 @@ def build_chart_data(df: pd.DataFrame) -> dict:
 def build_seller_table(df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate latest-day snapshot into a by-seller summary table."""
     if df.empty:
-        return pd.DataFrame(columns=["Seller ID", "# Offers", "# Unique ASINs", "Total Est. Stock"])
+        return pd.DataFrame(columns=["Seller ID", "# Offers", "# Unique ASINs", "Total Est. Stock", "Avg Discount %", "Disruption Score"])
     latest = df[df["date"] == df["date"].max()]
     agg = (
         latest.groupby("seller_id")
@@ -158,24 +205,30 @@ def build_seller_table(df: pd.DataFrame) -> pd.DataFrame:
             offers=("asin", "count"),
             unique_asins=("asin", "nunique"),
             total_stock=("inventory_est", "sum"),
+            avg_discount=("map_variance_pct", lambda x: x[x < 0].mean()),
+            disruption=("disruption_score", "sum"),
         )
         .reset_index()
-        .sort_values("offers", ascending=False)
+        .sort_values("disruption", ascending=False)
         .rename(columns={
             "seller_id": "Seller ID",
             "offers": "# Offers",
             "unique_asins": "# Unique ASINs",
             "total_stock": "Total Est. Stock",
+            "avg_discount": "Avg Discount %",
+            "disruption": "Disruption Score",
         })
     )
     agg["Total Est. Stock"] = agg["Total Est. Stock"].fillna(0).astype(int)
+    agg["Disruption Score"] = agg["Disruption Score"].fillna(0).astype(int)
+    agg["Avg Discount %"] = agg["Avg Discount %"].round(1)
     return agg.reset_index(drop=True)
 
 
 def build_asin_table(df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate latest-day snapshot into a by-ASIN summary table."""
     if df.empty:
-        return pd.DataFrame(columns=["ASIN", "Product", "# 3P Sellers", "# 3P Offers", "Total 3P Inventory"])
+        return pd.DataFrame(columns=["ASIN", "Product", "# 3P Sellers", "# 3P Offers", "Total 3P Inventory", "Avg Discount %", "Disruption Score"])
     latest = df[df["date"] == df["date"].max()]
     agg = (
         latest.groupby(["asin", "product_name"])
@@ -183,24 +236,30 @@ def build_asin_table(df: pd.DataFrame) -> pd.DataFrame:
             sellers=("seller_id", "nunique"),
             offers=("seller_id", "count"),
             total_inventory=("inventory_est", "sum"),
+            avg_discount=("map_variance_pct", lambda x: x[x < 0].mean()),
+            disruption=("disruption_score", "sum"),
         )
         .reset_index()
-        .sort_values("offers", ascending=False)
+        .sort_values("disruption", ascending=False)
         .rename(columns={
             "asin": "ASIN",
             "product_name": "Product",
             "sellers": "# 3P Sellers",
             "offers": "# 3P Offers",
             "total_inventory": "Total 3P Inventory",
+            "avg_discount": "Avg Discount %",
+            "disruption": "Disruption Score",
         })
     )
     agg["Total 3P Inventory"] = agg["Total 3P Inventory"].fillna(0).astype(int)
+    agg["Disruption Score"] = agg["Disruption Score"].fillna(0).astype(int)
+    agg["Avg Discount %"] = agg["Avg Discount %"].round(1)
     return agg.reset_index(drop=True)
 
 
 # ── Load data ───────────────────────────────────────────────────────────────────
 asins_df = load_asins()
-snapshots_df = load_snapshots()
+snapshots_df = enrich_snapshots(load_snapshots(), asins_df)
 has_snapshot_data = len(snapshots_df) > 0
 
 # ── Session state — drill-down filter ───────────────────────────────────────────
@@ -276,7 +335,7 @@ if not has_snapshot_data:
     )
 else:
     # ── Metric cards ─────────────────────────────────────────────────────────────
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("3P Sellers (latest)", latest["seller_id"].nunique())
     col2.metric("3P Offers (latest)", len(latest))
     col3.metric(
@@ -286,6 +345,8 @@ else:
     fba_c = len(latest[latest["fulfillment"] == "FBA"])
     fbm_c = len(latest[latest["fulfillment"] == "FBM"])
     col4.metric("FBA / FBM", f"{fba_c} / {fbm_c}")
+    total_disruption = latest["disruption_score"].sum() if "disruption_score" in latest.columns else 0
+    col5.metric("Disruption Score", f"{int(total_disruption):,}")
 
     st.divider()
 
@@ -366,6 +427,8 @@ else:
                 "# Offers": st.column_config.NumberColumn("# Offers"),
                 "# Unique ASINs": st.column_config.NumberColumn("# Unique ASINs"),
                 "Total Est. Stock": st.column_config.NumberColumn("Total Est. Stock", format="%d"),
+                "Avg Discount %": st.column_config.NumberColumn("Avg Discount %", format="%.1f%%"),
+                "Disruption Score": st.column_config.NumberColumn("Disruption Score", format="%d"),
             },
         )
         # Handle row selection
@@ -393,6 +456,8 @@ else:
                 "# 3P Sellers": st.column_config.NumberColumn("# 3P Sellers"),
                 "# 3P Offers": st.column_config.NumberColumn("# 3P Offers"),
                 "Total 3P Inventory": st.column_config.NumberColumn("Total 3P Inventory", format="%d"),
+                "Avg Discount %": st.column_config.NumberColumn("Avg Discount %", format="%.1f%%"),
+                "Disruption Score": st.column_config.NumberColumn("Disruption Score", format="%d"),
             },
         )
         rows = sel.selection.rows if sel and sel.selection else []
