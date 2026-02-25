@@ -67,7 +67,7 @@ CHART_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     font=dict(size=12),
-    xaxis=dict(showgrid=False, zeroline=False),
+    xaxis=dict(showgrid=False, zeroline=False, type="date", tickformat="%b %d"),
     yaxis=dict(showgrid=True, gridcolor="rgba(0,0,0,0.06)", zeroline=False),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     hovermode="x unified",
@@ -216,6 +216,10 @@ with st.sidebar:
     st.caption("Unauthorized seller monitoring · MAP compliance · Grey market detection")
     st.divider()
 
+    all_brands = sorted(asins_df["brand"].dropna().unique().tolist())
+    brand_options = ["All"] + all_brands
+    selected_brand = st.selectbox("Filter by brand", brand_options, index=0)
+
     all_tags = sorted(asins_df["tag"].dropna().unique().tolist())
     tag_options = ["All"] + all_tags
     selected_tag = st.selectbox("Filter by tag", tag_options, index=0)
@@ -237,6 +241,9 @@ with st.sidebar:
 filtered_snaps = snapshots_df.copy()
 
 if has_snapshot_data:
+    if selected_brand != "All":
+        filtered_snaps = filtered_snaps[filtered_snaps["brand"] == selected_brand]
+
     if selected_tag != "All":
         filtered_snaps = filtered_snaps[filtered_snaps["tag"] == selected_tag]
 
