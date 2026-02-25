@@ -83,8 +83,8 @@ def enrich_snapshots(snaps: pd.DataFrame, asins: pd.DataFrame) -> pd.DataFrame:
                           positive = above MAP (overpricing)
 
       disruption_score  — inventory-weighted discount severity
-                          formula: inventory_est × |discount_pct| ^ 1.5
-                          e.g. 500 units at 15% below MAP → score of ~29,000
+                          formula: (inventory_est × |discount_pct| ^ 1.5) / 1000
+                          e.g. 500 units at 15% below MAP → score of ~29
                           non-linear: deep discounts score disproportionately
                           higher than shallow ones. Only computed for
                           below-MAP offers; 0 otherwise.
@@ -112,7 +112,7 @@ def enrich_snapshots(snaps: pd.DataFrame, asins: pd.DataFrame) -> pd.DataFrame:
 
     df["disruption_score"] = np.where(
         below_map & has_inventory,
-        (df["inventory_est"] * df["map_variance_pct"].abs() ** 1.5).round(0),
+        (df["inventory_est"] * df["map_variance_pct"].abs() ** 1.5 / 1000).round(1),
         0,
     )
 
@@ -330,7 +330,7 @@ def build_seller_table(df: pd.DataFrame, name_map: dict[str, str]) -> pd.DataFra
         })
     )
     agg["Total Est. Stock"] = agg["Total Est. Stock"].fillna(0).astype(int)
-    agg["Disruption Score"] = agg["Disruption Score"].fillna(0).astype(int)
+    agg["Disruption Score"] = agg["Disruption Score"].fillna(0).round(1)
     agg["Avg Discount %"] = agg["Avg Discount %"].round(1)
     # Join seller name — fall back to seller ID if not yet resolved
     agg["Seller Name"] = agg["Seller ID"].map(name_map).fillna("—")
@@ -366,7 +366,7 @@ def build_asin_table(df: pd.DataFrame) -> pd.DataFrame:
         })
     )
     agg["Total 3P Inventory"] = agg["Total 3P Inventory"].fillna(0).astype(int)
-    agg["Disruption Score"] = agg["Disruption Score"].fillna(0).astype(int)
+    agg["Disruption Score"] = agg["Disruption Score"].fillna(0).round(1)
     agg["Avg Discount %"] = agg["Avg Discount %"].round(1)
     return agg.reset_index(drop=True)
 
@@ -578,7 +578,7 @@ else:
                 "# Unique ASINs": st.column_config.NumberColumn("# Unique ASINs"),
                 "Total Est. Stock": st.column_config.NumberColumn("Total Est. Stock", format="%d"),
                 "Avg Discount %": st.column_config.NumberColumn("Avg Discount %", format="%.1f%%"),
-                "Disruption Score": st.column_config.NumberColumn("Disruption Score", format="%d"),
+                "Disruption Score": st.column_config.NumberColumn("Disruption Score", format="%.1f"),
             },
         )
         # Handle row selection
@@ -607,7 +607,7 @@ else:
                 "# 3P Offers": st.column_config.NumberColumn("# 3P Offers"),
                 "Total 3P Inventory": st.column_config.NumberColumn("Total 3P Inventory", format="%d"),
                 "Avg Discount %": st.column_config.NumberColumn("Avg Discount %", format="%.1f%%"),
-                "Disruption Score": st.column_config.NumberColumn("Disruption Score", format="%d"),
+                "Disruption Score": st.column_config.NumberColumn("Disruption Score", format="%.1f"),
             },
         )
         rows = sel.selection.rows if sel and sel.selection else []
