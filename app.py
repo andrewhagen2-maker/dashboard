@@ -511,11 +511,10 @@ else:
     # Row 3: % assortment clean | disruption score over time
     r3a, r3b = st.columns(2)
     with r3a:
-        st.plotly_chart(
-            line_chart(chart_data["pct_clean"], "pct_clean",
-                       "% of Assortment Clean", "#22A55A", "%"),
-            use_container_width=True,
-        )
+        clean_fig = line_chart(chart_data["pct_clean"], "pct_clean",
+                               "% of Assortment Clean", "#22A55A", "%")
+        clean_fig.update_yaxes(range=[0, 100])
+        st.plotly_chart(clean_fig, use_container_width=True)
     with r3b:
         st.plotly_chart(
             line_chart(chart_data["disruption_ts"], "disruption_score",
